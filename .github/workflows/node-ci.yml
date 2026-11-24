@@ -1,0 +1,82 @@
+name: Reusable Node / TypeScript CI
+
+on:
+  workflow_call:
+    inputs:
+      node_version_file:
+        description: 'Path to .tool-versions or .nvmrc (leave empty to use node_version)'
+        required: false
+        type: string
+        default: ''
+      node_version:
+        description: 'Node version fallback when node_version_file is empty (defaults to latest LTS)'
+        required: false
+        type: string
+        default: 'lts/*'
+      package_manager:
+        description: 'Package manager (npm)'
+        required: false
+        type: string
+        default: 'npm'
+      run_lint:
+        description: 'Run lint script if defined'
+        required: false
+        type: boolean
+        default: true
+      run_build:
+        description: 'Run build script if defined'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, Test & Build (Node / TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (from version file)
+        if: ${{ inputs.node_version_file != '' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ inputs.node_version_file }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set up Node.js (fallback version / latest LTS)
+        if: ${{ inputs.node_version_file == '' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Install dependencies
+        env:
+          PKG_MGR: ${{ inputs.package_manager }}
+        run: |
+          case "$PKG_MGR" in
+            npm) npm ci ;;
+            *)
+              echo "Unsupported package_manager: $PKG_MGR" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Run linter
+        if: ${{ inputs.run_lint }}
+        run: npm run lint --if-present
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build project
+        if: ${{ inputs.run_build }}
+        run: npm run build --if-present

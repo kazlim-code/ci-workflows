@@ -1,0 +1,74 @@
+name: Reusable Gleam CI
+
+on:
+  workflow_call:
+    inputs:
+      version_file:
+        description: 'Path to .tool-versions (leave empty to use otp_version + gleam_version)'
+        required: false
+        type: string
+        default: ''
+      otp_version:
+        description: 'Erlang/OTP version fallback when version_file is empty'
+        required: false
+        type: string
+        default: '28.0'
+      gleam_version:
+        description: 'Gleam compiler version fallback when version_file is empty'
+        required: false
+        type: string
+        default: '1.18.1'
+      run_format_check:
+        description: 'Run gleam format --check'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Format & Test (Gleam / BEAM)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up BEAM & Gleam (from version file)
+        if: ${{ inputs.version_file != '' }}
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: ${{ inputs.version_file }}
+          version-type: strict
+
+      - name: Set up BEAM & Gleam (from explicit versions)
+        if: ${{ inputs.version_file == '' }}
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ inputs.otp_version }}
+          gleam-version: ${{ inputs.gleam_version }}
+
+      - name: Cache Gleam dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/gleam
+            build
+          key: ${{ runner.os }}-gleam-${{ hashFiles('manifest.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gleam-
+
+      - name: Download dependencies
+        run: gleam deps download
+
+      - name: Check formatting
+        if: ${{ inputs.run_format_check }}
+        run: gleam format --check
+
+      - name: Run test suite
+        run: gleam test

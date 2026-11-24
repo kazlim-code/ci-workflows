@@ -1,0 +1,129 @@
+name: Reusable Gleam GitHub Pages Deploy
+
+on:
+  workflow_call:
+    inputs:
+      version_file:
+        description: 'Path to .tool-versions (leave empty to use otp_version + gleam_version)'
+        required: false
+        type: string
+        default: ''
+      otp_version:
+        description: 'Erlang/OTP version fallback when version_file is empty'
+        required: false
+        type: string
+        default: '28.0'
+      gleam_version:
+        description: 'Gleam compiler version fallback when version_file is empty'
+        required: false
+        type: string
+        default: '1.18.1'
+      export_module:
+        description: 'Gleam module to run for static export (e.g. dev_ing_website/export)'
+        required: true
+        type: string
+      base_path_env:
+        description: 'Env var receiving GitHub Pages base_path (e.g. DEV_ING_BASE_PATH)'
+        required: true
+        type: string
+      output_dir:
+        description: 'Static output directory to upload to GitHub Pages'
+        required: false
+        type: string
+        default: 'dist'
+
+permissions:
+  contents: read
+
+# Concurrency is intentionally declared in the caller workflow (group: pages)
+# to prevent GitHub Actions parent-child concurrency deadlocks.
+
+jobs:
+  build:
+    name: Build Static Site (Gleam MPA)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up BEAM & Gleam (from version file)
+        if: ${{ inputs.version_file != '' }}
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: ${{ inputs.version_file }}
+          version-type: strict
+
+      - name: Set up BEAM & Gleam (from explicit versions)
+        if: ${{ inputs.version_file == '' }}
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ inputs.otp_version }}
+          gleam-version: ${{ inputs.gleam_version }}
+
+      - name: Cache Gleam dependencies (exact manifest lock only in release)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/gleam
+          key: ${{ runner.os }}-gleam-release-${{ hashFiles('manifest.toml') }}
+
+      - name: Download dependencies
+        run: gleam deps download
+
+      - name: Check formatting
+        run: gleam format --check
+
+      - name: Run test suite
+        run: gleam test
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Validate inputs and export static site
+        shell: bash
+        env:
+          EXPORT_MODULE: ${{ inputs.export_module }}
+          BASE_PATH_ENV: ${{ inputs.base_path_env }}
+          BASE_PATH_VAL: ${{ steps.pages.outputs.base_path }}
+          OUTPUT_DIR: ${{ inputs.output_dir }}
+        run: |
+          if [[ ! "$EXPORT_MODULE" =~ ^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$ ]]; then
+            echo "Invalid export_module: $EXPORT_MODULE" >&2
+            exit 1
+          fi
+          if [[ ! "$BASE_PATH_ENV" =~ ^[A-Z][A-Z0-9_]*$ ]] || [[ "$BASE_PATH_ENV" =~ ^(PATH|HOME|IFS|ENV|CDPATH|SHELL|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|ZDOTDIR|FPATH|USER|LOGNAME|PWD|OLDPWD|TMPDIR|NODE_.*|NPM_CONFIG_.*|PYTHON.*|RUBY.*|PERL.*|CARGO_.*|RUSTFLAGS|JAVA_TOOL_OPTIONS|MAKEFLAGS|LD_.*|DYLD_.*|BASH_.*|ERL_.*|ELIXIR_.*|GLEAM_.*|GIT_.*|HEX_.*|REBAR_.*|MIX_.*|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|SSL_CERT_.*|GITHUB_.*|ACTIONS_.*|RUNNER_.*|CURL_.*|WGET_.*)$ ]]; then
+            echo "Invalid or forbidden base_path_env: $BASE_PATH_ENV" >&2
+            exit 1
+          fi
+          if [[ ! "$OUTPUT_DIR" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$ ]] || [[ "$OUTPUT_DIR" == *".."* ]]; then
+            echo "Invalid output_dir: $OUTPUT_DIR" >&2
+            exit 1
+          fi
+          env -- "${BASE_PATH_ENV}=${BASE_PATH_VAL}" gleam run -m "$EXPORT_MODULE"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ inputs.output_dir }}
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
