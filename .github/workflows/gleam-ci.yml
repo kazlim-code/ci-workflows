@@ -4,20 +4,25 @@ on:
   workflow_call:
     inputs:
       version_file:
-        description: 'Path to .tool-versions (leave empty to use otp_version + gleam_version)'
+        description: 'Path to .tool-versions (must include erlang, gleam, and rebar if Erlang deps exist; leave empty to use explicit version inputs)'
         required: false
         type: string
         default: ''
       otp_version:
-        description: 'Erlang/OTP version fallback when version_file is empty'
+        description: 'Erlang/OTP version (e.g. "28.0" or ">0") when version_file is empty'
         required: false
         type: string
-        default: '28.0'
+        default: ''
       gleam_version:
-        description: 'Gleam compiler version fallback when version_file is empty'
+        description: 'Gleam compiler version (e.g. "1.19.2" or ">0") when version_file is empty'
         required: false
         type: string
-        default: '1.18.1'
+        default: ''
+      rebar3_version:
+        description: 'Optional Rebar3 version (e.g. "3.28.0" or "3.x") when version_file is empty; leave empty to skip for pure-Gleam projects'
+        required: false
+        type: string
+        default: ''
       run_format_check:
         description: 'Run gleam format --check'
         required: false
@@ -46,12 +51,25 @@ jobs:
           version-file: ${{ inputs.version_file }}
           version-type: strict
 
+      - name: Validate explicit BEAM version inputs
+        if: ${{ inputs.version_file == '' }}
+        shell: bash
+        env:
+          INPUT_OTP_VERSION: ${{ inputs.otp_version }}
+          INPUT_GLEAM_VERSION: ${{ inputs.gleam_version }}
+        run: |
+          if [[ -z "$INPUT_OTP_VERSION" || -z "$INPUT_GLEAM_VERSION" ]]; then
+            echo "Provide either version_file or both otp_version and gleam_version." >&2
+            exit 1
+          fi
+
       - name: Set up BEAM & Gleam (from explicit versions)
         if: ${{ inputs.version_file == '' }}
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ inputs.otp_version }}
           gleam-version: ${{ inputs.gleam_version }}
+          rebar3-version: ${{ inputs.rebar3_version }}
 
       - name: Cache Gleam dependencies and build artifacts
         uses: actions/cache@v6
